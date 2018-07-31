@@ -1,0 +1,280 @@
+nc -lk 9999  开启端口
+
+import org.apache.spark.SparkConf
+import org.apache.spark.streaming.{Seconds, StreamingContext}
+
+val conf=new SparkConf().setAppName("Spark Streaming Qucik Ops").setMaster("local[2]")
+val ssc=new StreamingContext(conf,Seconds(5))
+val lines=ssc.socketTextStream("localhost",9999)
+val words=lines.flatMap(line=>line.split(" "))
+val pairs=words.map(word=>(word,1))
+val wordcount=pairs.reduceByKey(_+_)
+wordcount.print()
+ssc.start()
+ssc.awaitTermination()
+
+ 
+import org.apache.spark.{SparkConf,SparkContext}
+import org.apache.spark.streaming.{Seconds, StreamingContext}
+val conf = new SparkConf().setAppName("demo").setMaster("local[2]")
+val input1 = List((1, true), (2, false), (3, false), (4, true), (5, false)) 
+val input2 = List((1, false), (2, false), (3, true), (4, true), (5, true)) 
+val rdd1 = sc.parallelize(input1) 
+val rdd2 = sc.parallelize(input2)
+val ssc = new StreamingContext(sc, Seconds(3))
+import scala.collection.mutable 
+val ds1 = ssc.queueStream[(Int, Boolean)](mutable.Queue(rdd1)) 
+val ds2 = ssc.queueStream[(Int, Boolean)](mutable.Queue(rdd2))
+// Join the two streams together by merging them into a single dstream 
+val ds = ds1.join(ds2)
+ds.print()
+ssc.start() 
+ssc.awaitTerminationOrTimeout(5000) 
+ssc.stop()
+
+ 存储数据，一定要注意，代码在那边执行和内存溢出的问题，慎用collection！
+dstream.foreachRDD { rdd => 
+rdd.foreachPartition { partitionOfRecords =>
+//val connection = createNewConnection()
+// ConnectionPool is a static, lazily initialized pool of connections 
+val connection = ConnectionPool.getConnection() 
+partitionOfRecords.foreach(record => connection.send(record))
+ConnectionPool.returnConnection(connection)  // return to the pool for future reuse //connection.close()
+}
+}
+
+下面会报错，nullpointexception
+dstream.foreachRDD { rdd => 
+val connection = createNewConnection()  // executed at the driver node 
+rdd.foreach { record => 
+connection.send(record) // executed at the worker
+}
+}
+
+//10G
+rdd.repartition(2000).forEachPartition{partition=>val r=partition.collection r.save}
+
+
+Dstream to df
+streamingContext.remember(Minutes(5))
+/** DataFrame operations inside your streaming program */
+val words: DStream[String] = ... vak rdd words.foreachRDD { rdd =>
+// Get the singleton instance of SparkSession 
+val spark = SparkSession.builder.config(rdd.sparkContext.getConf).getOrCreate() import spark.implicits._
+// Convert RDD[String] to DataFrame 
+val wordsDataFrame = rdd.toDF("word")
+// Create a temporary view 
+wordsDataFrame.createOrReplaceTempView("words")
+// Do word count on DataFrame using SQL and print it 
+val wordCountsDataFrame =  spark.sql("select word, count(*) as total from words group by word") wordCountsDataFrame.show()
+}
+
+// Reduce last 10 minites of data, every 5 minutes 
+val windowedWordCounts = pairs.reduceByKeyAndWindow((a:Int,b:Int) => (a + b), Seconds(30), Seconds(10))
+countByWindow 
+reduceByWindow 
+reduceByKeyAndWindow
+countByValueAndWindow
+
+output Operation on DStreams
+1.print()
+2.saveAsTextFiles
+3.saveAsHadoopFiles
+4.saveAsObjectFiles
+files are saved at each batch interval
+
+persist() 缓存数据到内存或者硬盘
+DStreams 基于window和state 操作会自动缓冲，默认地址内存和disk
+
+sparking streaming checkpointing
+是一种容错机制，updateStateByKey or reduceByKeyAndWindow被调用自动保存checkpointing
+
+checkpointing 是一个应用层上面保存DAG AND RDDS，进程死掉后，可以再次调用，不会保留lineage
+
+persist 是一个临时的保存地方，会保留lineage，推出后，自动删除
+
+Two types of data that are checkpointed:Metadata Checkpointing 
+ Configuration- the configuration used to create the streaming application.
+ DStream operations- the set of DStream operations that define the streaming application.
+ Incomplete batches- Batches whose jobs are queued but have not completed yet.
+Data Checkpointing
+Saving of the generated RDDs to reliable storage.
+Intermediate RDDs of stateful transformations are periodically checkpointed to reliable storage (e.g. HDFS) to cut off the dependency chains.
+
+// Function to create and setup a new StreamingContext 
+def functionToCreateContext(): StreamingContext = { 
+val ssc = new StreamingContext(...)   // new context 
+val lines = ssc.socketTextStream(...) // create DStreams
+... 
+ssc.checkpoint(checkpointDirectory)   // set checkpoint directory 
+ssc
+}
+// Get StreamingContext from checkpoint data or create a new one 
+val context = StreamingContext.getOrCreate(checkpointDirectory, functionToCreateContext) 
+// ……
+// Start the context 
+context.start() 
+context.awaitTermination() 
+
+Accumulators, Broadcast variables cannot be recovered from checkpoint in Spark Streaming
+
+
+SPARK STRUCTURED STREAMING 
+The system ensures end-to-end exactly-once fault-tolerance guarantees through checkpointing and Write Ahead Logs.
+
+val lines = spark.readStream.format("socket").option("host", "localhost").option("port", 9999).load() // Split the lines into words 
+val words = lines.as[String].flatMap(_.split(" "))
+// Generate running word count 
+val wordCounts = words.groupBy("value").count()
+// Start running the query that prints the running counts to the console 
+val query = wordCounts.writeStream.outputMode("complete").format("console").start() 
+query.awaitTermination()
+
+
+outmode
+1.complete mode  有重复
+
+2.append mode  写入新的
+
+3.update mode  更新数据
+
+基于时间产生的时间点（event-time）
+val lines = spark.readStream.format("socket").option("host", "localhost").option("port", 9999).load()
+// Split the lines into words 
+val words = lines.as[String].flatMap(_.split(" ")).withColumnRenamed("value", "word").withColumn("timestamp", current_timestamp()) 
+val windowedCounts = words.groupBy( 
+window($"timestamp", "10 minutes", "5 minutes"), $"word").count()
+// Start running the query that prints the running counts to the console 
+val query = windowedCounts.writeStream.outputMode("complete").format("console").start() 
+query.awaitTermination()
+
+处理多久时间的late data（watermark）
+val windowedCounts = words.withWatermark("timestamp", "10 minutes") .groupBy(window($"timestamp", "10 minutes", "5 minutes"),  $"word") .count()
+
+
+
+
+
+
+
+case class WordCount(word:String,count:Int)
+val lines =spark.readStream.format("socket").option("host","localhost").option("port",9997).load()
+val df = lines.as[String].flatMap(_.split(" ")).map(w=>(w,1)).withColumnRenamed("_1","word").withColumnRenamed("_2","count")
+df.createOrReplaceTempView("updates")
+val df1 = spark.sql("select count(*) from updates")
+import spark.implicits._
+val ds=df.as[WordCount]
+import org.apache.spark.sql.expressions.scalalang.typed
+val result = ds.groupByKey(_.word.substring(0,1)).agg(typed.sum(_.count))
+val query = windowedCounts.writeStream.outputMode("complete").format("console").start() 
+//val query = windowedCounts.writeStream.outputMode("complete").option("truncate","false").option("numRows",50).start() 
+query.awaitTermination()
+
+
+import org.apache.spark.sql.functions.expr 
+val impressions = spark.readStream. ... 
+val clicks = spark.readStream. ...
+// Apply watermarks on event-time columns 
+val impressionsWithWatermark = impressions.withWatermark("impressionTime", "2 hours") 
+val clicksWithWatermark = clicks.withWatermark("clickTime", "3 hours")
+// Join with event-time constraints 
+impressionsWithWatermark.join(clicksWithWatermark, 
+expr("clickAdId = impressionAdId AND clickTime >= impressionTime AND clickTime <= impressionTime + interval 1 hour"), "inner")
+……
+
+
+dataframe 去重
+val streamingDf = spark.readStream. ...  // columns: guid, eventTime, ...
+// Without watermark using guid column 
+streamingDf.dropDuplicates("guid")
+// With watermark using guid and eventTime columns 
+streamingDf
+.withWatermark("eventTime", "10 seconds") 
+.dropDuplicates("guid", "eventTime")
+
+目前局限性
+count()  → ds.groupBy().count
+foreach() → ds.writeStream.foreach(...)
+show() → use the console sink
+
+
+source file
+import org.apache.spark.sql.types._
+val eventSchema = new StructType().add("event_id", "string").add("user_id", "string") 
+.add("start_time", "string").add("address", "string").add("city", "string").add("state", "string").add("country", "string") .add("latitude", "float").add("longitude", "float")
+val dfEvents = spark.readStream.option("sep", ",").schema(eventSchema).csv("hdfs:///user/events/events_*.csv") //这里要注意可能要写文件夹
+val result = dfEvents.groupBy("user_id").count()
+// Start running the query that prints the running counts to the console 
+val query = result.writeStream.outputMode("complete").format("console").start()
+query.awaitTermination()
+
+source kafka
+
+receiver based：KafkaUtils.createStream(deprecated)
+通过增加receiver的数目，来提高数据的速率，offset储存在zookeeper中，at least once send，可能重复，当请求量过大，zookeeper处理不过来
+
+Direct Stream ： KafkaUtils.createDirectStream
+1:1 correspondence between Kafka partitions and Spark partitions
+the # of partitions in rdd 小于topic的分组
+offset 在kafka
+offset 在self0controlled  在RDB或者checkpoints
+
+locationStrateies(kafka 到 spark)
+1.locationStrateies.PreferConsistent  topic中的分区，均匀的分配到broker上
+2.locationStrateies.PreferBrokers  spark的broker和kafka的分区在同一个环境中，减少文件的迁移
+3.locationStrateies.PreferFixed  自由控制每个topic分区送往那个broker.  
+
+consumerStrateies
+ConsumerStrateies.Subscribe  选择topic
+CousumerStrateies.Assign 选择partitions
+
+To enable WAL:in spark.conf
+spark.streaming.receiver.writeAheadLog.enabled  true 
+
+exactly once processing for Spark Streaming：
+data receiving（at least once）	
+data transformation（exact once）write ahead log + checkpointing 保证exact once
+data output
+		offset commit  ：transaction
+		idempotent  ：if output writes mutliple time，it doesn't change 	the final result	
+
+checkpointing and calling kafka offset commit api/ Subscribe to 1 topic val df = spark.read
+.format("kafka")
+.option("kafka.bootstrap.servers", "host1:port1,host2:port2") .option("subscribe", "topic1")
+.option("startingOffsets", "earliest")
+.option("endingOffsets", "latest")
+.load()
+df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").as[(String, String)]
+
+streaming queries 
+/ Subscribe to 1 topic 
+val df = spark.readStream
+.format("kafka")
+.option("kafka.bootstrap.servers", "host1:port1,host2:port2") 
+.option("subscribe", "topic1")
+.load()
+df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").as[(String, String)]
+
+batch queries
+/ Subscribe to 1 topic val df = spark.read
+.format("kafka")
+.option("kafka.bootstrap.servers", "host1:port1,host2:port2") .option("subscribe", "topic1")
+.option("startingOffsets", "earliest")
+.option("endingOffsets", "latest")
+.load()
+df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)").as[(String, String)]
+
+Stereaming writes
+val ds = df.selectExpr("CAST(key AS STRING)", "CAST(value AS STRING)") 
+.writeStream
+.format("kafka")
+.option("kafka.bootstrap.servers", "host1:port1,host2:port2")
+.option("topic", "topic1")
+.start()
+
+batch writes
+df.selectExpr("topic", "CAST(key AS STRING)", "CAST(value AS STRING)") 
+.write
+.format("kafka")
+.option("kafka.bootstrap.servers", "host1:port1,host2:port2")
+.save()

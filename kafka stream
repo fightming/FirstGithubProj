@@ -1,0 +1,58 @@
+交互保证
+   1) at most once: 最多一次,这个和JMS中"非持久化"消息类似.发送一次,无论成败,将不会重发.
+    2) at least once: 消息至少发送一次,如果消息未能接受成功,可能会重发,直到接收成功.
+    3) exactly once: 消息只会发送一次.
+    at most once: 消费者fetch消息,然后保存offset,然后处理消息;当client保存offset之后,但是在消息处理过程中出现了异常,导致部分消息未能继续处理.那么此后"未处理"的消息将不能被fetch到,这就是"at most once".
+    at least once: 消费者fetch消息,然后处理消息,然后保存offset.如果消息处理成功之后,但是在保存offset阶段zookeeper异常导致保存操作未能执行成功,这就导致接下来再次fetch时可能获得上次已经处理过的消息,这就是"at least once"，原因offset没有及时的提交给zookeeper，zookeeper恢复正常还是之前offset状态.
+    exactly once: kafka中并没有严格的去实现(基于2阶段提交,事务),我们认为这种策略在kafka中是没有必要的.
+    通常情况下"at-least-once"是我们搜选.(相比at most once而言,重复接收数据总比丢失数据要好).
+
+  
+01. create schema
+
+
+ curl -X POST -i -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+      --data '{"schema": "{ \"type\": \"record\",\"namespace\":\"com.datafibers.kafka.streams.avro\",\"name\": \"Stock\",\"fields\":[{\"name\":\"refresh_time\",\"type\":\"string\"},{\"name\":\"symbol\",\"type\":\"string\"},{\"name\":\"company_name\",\"type\":\"string\"},{\"name\":\"exchange\",\"type\":\"string\"},{\"name\":\"open_price\",\"type\":\"double\"},{\"name\":\"ask_price\",\"type\":\"double\"},{\"name\":\"ask_size\",\"type\":\"int\"},{\"name\":\"bid_price\",\"type\":\"double\"},{\"name\":\"bid_size\",\"type\":\"int\"},{\"name\":\"price\",\"type\":\"double\"}]}"}' \
+ http://localhost:8081/subjects/stock_test1/versions
+
+02. ops start mask0110000
+
+03. Add a stock connect and send data to stock_test1
+
+04. Run the main() in class
+
+05. Verify in VM with below command
+
+kafka-console-consumer --topic stock_out1 --from-beginning \
+--zookeeper localhost:2181 \
+--property print.key=true  \
+--property value.deserializer=org.apache.kafka.common.serialization.LongDeserializer
+
+
+ curl -X POST -i -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+     --data '{"schema": "{ \"type\": \"record\",\"namespace\":\"com.datafibers.kafka.streams.avro\",\"name\": \"Stock\",\"fields\":[{\"name\":\"refresh_time\",\"type\":\"string\"},{\"name\":\"symbol\",\"type\":\"string\"},{\"name\":\"company_name\",\"type\":\"string\"},{\"name\":\"exchange\",\"type\":\"string\"},{\"name\":\"open_price\",\"type\":\"double\"},{\"name\":\"ask_price\",\"type\":\"double\"},{\"name\":\"ask_size\",\"type\":\"int\"},{\"name\":\"bid_price\",\"type\":\"double\"},{\"name\":\"bid_size\",\"type\":\"int\"},{\"name\":\"price\",\"type\":\"double\"}]}"}' \
+  http://localhost:8081/subjects/stock_test2/versions
+
+  06. Run avro example as output topic
+
+  kafka-topics --create --topic stock_out2 \
+                    --zookeeper localhost:2181 --partitions 1 --replication-factor 1
+
+07. Verify result in avro format with below command
+
+kafka-avro-console-consumer --bootstrap-server localhost:9092 --topic stock_out2 --from-beginning
+
+time
+event-time   user在producer中定义的时间        
+
+processing-time   记录被consumed的时间
+
+ingestion-time    时间由kafka-brokers生成    
+
+ 
+ksql http://localhost:9088
+
+从一个topic将avro数据写出，同时kstream进行转化，在写入到另一个topic也是avro
+
+set 'auto.offset.reset' = 'earliest';
+set 'auto.offset.reset' = 'latest';
